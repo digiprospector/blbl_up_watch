@@ -82,25 +82,35 @@ def login_by_qrcode():
         return None
 
 def get_wbi_keys(session: requests.Session):
-    """获取WBI签名所需的img_key和sub_key"""
+    """获取WBI签名所需的img_key和sub_key，失败时会自动重试。"""
     url = "https://api.bilibili.com/x/web-interface/nav"
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
         "Accept-Language": "en-US,en;q=0.5",
     }
-    try:
-        response = session.get(url, headers=headers, timeout=5)
-        response.raise_for_status()
-        data = response.json()
-        img_url = data["data"]["wbi_img"]["img_url"]
-        sub_url = data["data"]["wbi_img"]["sub_url"]
-        img_key = img_url.split("/")[-1].split(".")[0]
-        sub_key = sub_url.split("/")[-1].split(".")[0]
-        return img_key, sub_key
-    except Exception as e:
-        print(f"获取WBI密钥失败: {e}")
-        return None, None
+
+    max_retries = 10
+    retry_delay = 5  # 5秒钟
+
+    for attempt in range(max_retries):
+        try:
+            response = session.get(url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            img_url = data["data"]["wbi_img"]["img_url"]
+            sub_url = data["data"]["wbi_img"]["sub_url"]
+            img_key = img_url.split("/")[-1].split(".")[0]
+            sub_key = sub_url.split("/")[-1].split(".")[0]
+            return img_key, sub_key
+        except Exception as e:
+            print(f"获取WBI密钥失败 (尝试 {attempt + 1}/{max_retries}): {e}")
+            if attempt < max_retries - 1:
+                print(f"将在 {retry_delay // 60} 分钟后重试...")
+                time.sleep(retry_delay)
+            else:
+                print("已达到最大重试次数，获取WBI密钥失败。")
+    return None, None
 
 def get_authenticated_session():
     """获取一个经过认证的session，优先从本地文件加载，否则扫码登录"""
