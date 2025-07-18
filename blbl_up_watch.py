@@ -195,7 +195,7 @@ def get_following_groups(session: requests.Session):
         return {}
 
 def get_followings_in_group(session: requests.Session, mid: int, tag_id: int):
-    """根据分组ID获取关注的UP主列表"""
+    """根据分组ID获取关注的UP主列表，失败时会自动重试。"""
     # 此API (x/relation/tag) 不需要WBI签名
     # 旧的API (x/relation/followings) 会返回全部关注，tagid参数无效
     api_url = "https://api.bilibili.com/x/relation/tag"
@@ -203,25 +203,38 @@ def get_followings_in_group(session: requests.Session, mid: int, tag_id: int):
         "mid": mid,
         "tagid": tag_id,
         "pn": 1,
-        "ps": 100,  # 最多获取10个UP主
+        "ps": 100,  # 每页数量，对于此API，通常一次返回分组内所有UP主
     }
     headers = {
         "Referer": f"https://space.bilibili.com/{mid}/fans/follow",
     }
-    
-    try:
-        # session中已包含User-Agent
-        response = session.get(api_url, params=params, headers=headers, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        if data.get('code') == 0:
-            # 此API返回的数据在 'data' 键下，是一个列表
-            return data.get("data", [])
-        print(f"获取分组关注列表失败: {data.get('message')}")
-        return []
-    except Exception as e:
-        print(f"请求关注列表时发生错误: {e}")
-        return []
+
+    max_retries = 10
+    retry_delay = 5  # 5秒钟
+
+    for attempt in range(max_retries):
+        try:
+            # session中已包含User-Agent
+            response = session.get(api_url, params=params, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            if data.get('code') == 0:
+                # 成功获取，返回数据
+                return data.get("data", [])
+            else:
+                # API返回错误码，打印信息并重试
+                print(f"获取分组关注列表失败 (尝试 {attempt + 1}/{max_retries}): {data.get('message')}")
+        except Exception as e:
+            # 请求或解析过程发生异常，打印信息并重试
+            print(f"请求关注列表时发生错误 (尝试 {attempt + 1}/{max_retries}): {e}")
+
+        if attempt < max_retries - 1:
+            print(f"将在 {retry_delay} 秒后重试...")
+            time.sleep(retry_delay)
+        else:
+            print("已达到最大重试次数，获取关注列表失败。")
+            
+    return [] # 所有重试都失败后，返回空列表
 
 def get_up_videos(mid, session: requests.Session):
     """获取UP主第一页视频信息"""
