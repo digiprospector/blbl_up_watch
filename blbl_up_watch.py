@@ -3,7 +3,7 @@ import time
 import hashlib
 import urllib.parse
 import json
-import os
+from pathlib import Path
 from functools import reduce
 import sqlite3
 import qrcode
@@ -21,11 +21,10 @@ def get_mixin_key(orig: str):
 
 
 # 确保data目录存在
-DATA_DIR = "data"
-if not os.path.exists(DATA_DIR):
-    os.makedirs(DATA_DIR)
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-COOKIE_FILE = os.path.join(DATA_DIR, "bili_cookies.json")
+COOKIE_FILE = DATA_DIR / "bili_cookies.json"
 
 def login_by_qrcode():
     """通过二维码扫描进行登录并返回一个包含cookies的session对象"""
@@ -121,7 +120,7 @@ def get_authenticated_session():
     }
     session.headers.update(headers)
 
-    if os.path.exists(COOKIE_FILE):
+    if COOKIE_FILE.exists():
         try:
             with open(COOKIE_FILE, 'r') as f:
                 cookies = json.load(f)
@@ -291,7 +290,7 @@ def get_up_videos(mid, session: requests.Session):
         print(f"请求发生错误: {e}")
         return []
 
-DB_FILE = os.path.join(DATA_DIR, "bilibili_videos.db")
+DB_FILE = DATA_DIR / "bilibili_videos.db"
 
 def setup_database():
     """初始化数据库和表"""
@@ -393,7 +392,7 @@ if __name__ == "__main__":
 
             # 将新视频列表写入文本文件，每行一个
             current_time = time.strftime("%Y%m%d-%H%M%S")
-            output_filename = os.path.join(DATA_DIR, f"investment_videos_{current_time}.txt")
+            output_filename = DATA_DIR / f"investment_videos_{current_time}.txt"
 
             with open(output_filename, 'w', encoding='utf-8') as f:
                 for video in new_videos_list:
