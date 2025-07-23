@@ -392,7 +392,7 @@ if __name__ == "__main__":
 
             # 将新视频列表写入文本文件，每行一个
             current_time = time.strftime("%Y%m%d-%H%M%S")
-            output_filename = DATA_DIR / f"investment_videos_{current_time}.txt"
+            output_filename = DATA_DIR / "list" / f"investment_videos_{current_time}.txt"
 
             with open(output_filename, 'w', encoding='utf-8') as f:
                 for video in new_videos_list:
