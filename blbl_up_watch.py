@@ -26,8 +26,33 @@ def get_mixin_key(orig: str):
     """根据B站的规则对imgKey和subKey进行打乱，生成mixinKey"""
     return reduce(lambda s, i: s + orig[i], MIXIN_KEY_ENC_TAB, '')[:32]
 
-CONFIG_FILE = Path("config.json")
-CONFIG_SAMPLE_FILE = Path("config_sample.json")
+def parse_config_file():
+    """解析配置文件，返回配置字典"""
+    if not CONFIG_FILE.exists():
+        logger.info(f"未找到配置文件 {CONFIG_FILE}，将从 {CONFIG_SAMPLE_FILE} 复制。")
+        try:
+            shutil.copy(CONFIG_SAMPLE_FILE, CONFIG_FILE)
+        except Exception as e:
+            logger.error(f"从 {CONFIG_SAMPLE_FILE} 复制配置文件失败: {e}")
+            exit()
+
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            _config = json.load(f)
+    except (json.JSONDecodeError, Exception) as e:
+        logger.error(f"读取配置文件 {CONFIG_FILE} 失败: {e}")
+        logger.error(f"请检查文件格式是否正确，或删除 {CONFIG_FILE} 以从示例文件重新生成。")
+        exit()
+
+    return _config
+
+SCRIPT_DIR = Path(__file__).parent
+CONFIG_FILE = SCRIPT_DIR / "config.json"
+CONFIG_SAMPLE_FILE = SCRIPT_DIR / "config_sample.json"
+config = parse_config_file()
+DATA_DIR = SCRIPT_DIR / config.get("data_directory", "data")
+DB_FILE = DATA_DIR / "bilibili_videos.db"
+
 
 def login_by_qrcode():
     """通过二维码扫描进行登录并返回一个包含cookies的session对象"""
@@ -332,30 +357,6 @@ def save_video_if_not_exists(conn: sqlite3.Connection, video_info: dict):
     except sqlite3.IntegrityError:
         # bvid (主键) 已存在，忽略错误
         return False # 未插入
-
-def parse_config_file():
-    """解析配置文件，返回配置字典"""
-    if not CONFIG_FILE.exists():
-        logger.info(f"未找到配置文件 {CONFIG_FILE}，将从 {CONFIG_SAMPLE_FILE} 复制。")
-        try:
-            shutil.copy(CONFIG_SAMPLE_FILE, CONFIG_FILE)
-        except Exception as e:
-            logger.error(f"从 {CONFIG_SAMPLE_FILE} 复制配置文件失败: {e}")
-            exit()
-
-    try:
-        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-            _config = json.load(f)
-    except (json.JSONDecodeError, Exception) as e:
-        logger.error(f"读取配置文件 {CONFIG_FILE} 失败: {e}")
-        logger.error(f"请检查文件格式是否正确，或删除 {CONFIG_FILE} 以从示例文件重新生成。")
-        exit()
-
-    return _config
-
-config = parse_config_file()
-DATA_DIR = Path(config.get("data_directory", "data"))
-DB_FILE = DATA_DIR / "bilibili_videos.db"
 
 if __name__ == "__main__":
     # 确保 data 目录存在
