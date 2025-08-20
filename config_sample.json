@@ -1,0 +1,6 @@
+{
+    "target_group_name": "投资",
+    "data_directory": "data",
+    "retry_max": 10,
+    "retry_interval": 5
+}

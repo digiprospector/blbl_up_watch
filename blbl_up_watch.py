@@ -1,9 +1,13 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
 import requests
 import time
 import hashlib
 import urllib.parse
 import json
 from pathlib import Path
+import shutil
 from functools import reduce
 import sqlite3
 import qrcode
@@ -22,12 +26,8 @@ def get_mixin_key(orig: str):
     """根据B站的规则对imgKey和subKey进行打乱，生成mixinKey"""
     return reduce(lambda s, i: s + orig[i], MIXIN_KEY_ENC_TAB, '')[:32]
 
-
-# 确保data目录存在
-DATA_DIR = Path("data")
-DATA_DIR.mkdir(parents=True, exist_ok=True)
-
-COOKIE_FILE = DATA_DIR / "bili_cookies.json"
+CONFIG_FILE = Path("config.json")
+CONFIG_SAMPLE_FILE = Path("config_sample.json")
 
 def login_by_qrcode():
     """通过二维码扫描进行登录并返回一个包含cookies的session对象"""
@@ -61,7 +61,7 @@ def login_by_qrcode():
     
     try:
         while True:
-            time.sleep(3)
+            time.sleep(config.get("retry_interval", 5))  # 等待一段时间后再轮询
             params = {'qrcode_key': qrcode_key}
             poll_response = session.get(poll_api, params=params) # 此处将自动使用 session 的 headers
             poll_response.raise_for_status()
@@ -92,8 +92,8 @@ def get_wbi_keys(session: requests.Session):
         "Accept-Language": "en-US,en;q=0.5",
     }
 
-    max_retries = 10
-    retry_delay = 5  # 5秒钟
+    max_retries = config.get("retry_max", 10)
+    retry_interval = config.get("retry_interval", 5)
 
     for attempt in range(max_retries):
         try:
@@ -108,8 +108,9 @@ def get_wbi_keys(session: requests.Session):
         except Exception as e:
             logger.info(f"获取WBI密钥失败 (尝试 {attempt + 1}/{max_retries}): {e}")
             if attempt < max_retries - 1:
-                logger.info(f"将在 {retry_delay // 60} 分钟后重试...")
-                time.sleep(retry_delay)
+                logger.info(f"将在 {retry_interval} 秒后重试...")
+                time.sleep(retry_interval)
+
             else:
                 logger.info("已达到最大重试次数，获取WBI密钥失败。")
     return None, None
@@ -123,6 +124,7 @@ def get_authenticated_session():
     }
     session.headers.update(headers)
 
+    COOKIE_FILE = DATA_DIR / "bili_cookies.json"
     if COOKIE_FILE.exists():
         try:
             with open(COOKIE_FILE, 'r') as f:
@@ -211,8 +213,8 @@ def get_followings_in_group(session: requests.Session, mid: int, tag_id: int):
         "Referer": f"https://space.bilibili.com/{mid}/fans/follow",
     }
 
-    max_retries = 10
-    retry_delay = 5  # 5秒钟
+    max_retries = config.get("retry_max", 10)
+    retry_interval = config.get("retry_interval", 5)
 
     for attempt in range(max_retries):
         try:
@@ -229,10 +231,10 @@ def get_followings_in_group(session: requests.Session, mid: int, tag_id: int):
         except Exception as e:
             # 请求或解析过程发生异常，打印信息并重试
             logger.info(f"请求关注列表时发生错误 (尝试 {attempt + 1}/{max_retries}): {e}")
-
+            
         if attempt < max_retries - 1:
-            logger.info(f"将在 {retry_delay} 秒后重试...")
-            time.sleep(retry_delay)
+            logger.info(f"将在 {retry_interval} 秒后重试...")
+            time.sleep(retry_interval)
         else:
             logger.info("已达到最大重试次数，获取关注列表失败。")
             
@@ -293,8 +295,6 @@ def get_up_videos(mid, session: requests.Session):
         logger.info(f"请求发生错误: {e}")
         return []
 
-DB_FILE = DATA_DIR / "bilibili_videos.db"
-
 def setup_database():
     """初始化数据库和表"""
     conn = sqlite3.connect(DB_FILE)
@@ -333,7 +333,57 @@ def save_video_if_not_exists(conn: sqlite3.Connection, video_info: dict):
         # bvid (主键) 已存在，忽略错误
         return False # 未插入
 
+def parse_config_file():
+    """解析配置文件，返回配置字典"""
+    if not CONFIG_FILE.exists():
+        logger.info(f"未找到配置文件 {CONFIG_FILE}，将从 {CONFIG_SAMPLE_FILE} 复制。")
+        try:
+            shutil.copy(CONFIG_SAMPLE_FILE, CONFIG_FILE)
+        except Exception as e:
+            logger.error(f"从 {CONFIG_SAMPLE_FILE} 复制配置文件失败: {e}")
+            exit()
+
+    try:
+        with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+            _config = json.load(f)
+    except (json.JSONDecodeError, Exception) as e:
+        logger.error(f"读取配置文件 {CONFIG_FILE} 失败: {e}")
+        logger.error(f"请检查文件格式是否正确，或删除 {CONFIG_FILE} 以从示例文件重新生成。")
+        exit()
+
+    return _config
+
+config = parse_config_file()
+DATA_DIR = Path(config.get("data_directory", "data"))
+DB_FILE = DATA_DIR / "bilibili_videos.db"
+
 if __name__ == "__main__":
+    # 确保 data 目录存在
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        logger.info(f"数据目录设置为: {DATA_DIR.resolve()}")
+    except Exception as e:
+        logger.error(f"创建数据目录 {DATA_DIR} 失败: {e}")
+        exit()
+
+    # 读取并规范化目标分组配置
+    target_groups_config = config.get("target_group_name")
+    if not target_groups_config:
+        logger.error(f"配置文件 {CONFIG_FILE} 中 'target_group_name' 未找到或为空。")
+        exit()
+
+    if isinstance(target_groups_config, str):
+        target_group_names = [target_groups_config]
+    elif isinstance(target_groups_config, list):
+        target_group_names = target_groups_config
+    else:
+        logger.error(f"配置文件 {CONFIG_FILE} 中 'target_group_name' 的值必须是字符串或字符串列表。")
+        exit()
+
+    if not all(isinstance(name, str) and name for name in target_group_names):
+        logger.error(f"配置文件 {CONFIG_FILE} 中 'target_group_name' 必须是(非空)字符串或(非空)字符串列表。")
+        exit()
+
     logger.info("正在初始化，准备登录...")
     session = get_authenticated_session()
 
@@ -351,68 +401,71 @@ if __name__ == "__main__":
 
     logger.info("\n正在获取您的关注分组...")
     groups = get_following_groups(session)
-    time.sleep(5)
+    time.sleep(config.get("retry_interval", 5))
 
-    if "投资" in groups:
-        investment_tag_id = groups["投资"]
-        logger.info(f"找到 '投资' 分组，正在获取该分组下的UP主列表...")
-        
-        investment_ups = get_followings_in_group(session, my_mid, investment_tag_id)
-        new_videos_count = 0
-        new_videos_list = []
-        
-        if investment_ups:
-            conn = sqlite3.connect(DB_FILE)
-            try:
-                logger.info("\n--- '投资' 分组下的UP主视频检查 ---")
-                total_ups = len(investment_ups)
-                for i, up in enumerate(investment_ups, 1):
-                    logger.info(f"  - [{i}/{total_ups}] 正在检查UP主: {up['uname']:<20} MID: {up['mid']}")
-                    mid = str(up['mid'])
-                    
-                    videos = get_up_videos(mid, session)
-                    if videos:
-                        logger.info(f"    获取到 {len(videos)} 个最新视频，正在比对数据库...")
-                        for video in videos:
-                            video_info = {
-                                "up_name": up['uname'],
-                                "up_mid": up['mid'],
-                                "bvid": video['bvid'],
-                                "title": video['title'],
-                                "link": video['link']
-                            }
-                            if save_video_if_not_exists(conn, video_info):
-                                logger.info(f"      [新视频] {video['title']}")
-                                logger.info(f"        链接: {video['link']}")
-                                new_videos_count += 1
-                                new_videos_list.append(video_info)
-                    else:
-                        logger.info("    未能获取到视频列表。")
-                    logger.info("") # 空行分隔不同的UP主
-                    time.sleep(5)
-            finally:
-                conn.close()
-
-            # 将新视频列表写入文本文件，每行一个
-            current_time = time.strftime("%Y%m%d-%H%M%S")
-            output_filename = DATA_DIR / "list" / f"investment_videos_{current_time}.txt"
-
-            with open(output_filename, 'w', encoding='utf-8') as f:
-                for video in new_videos_list:
-                    line = f"- {video['title']} | 作者: {video['up_name']} | 链接: {video['link']}\n"
-                    f.write(line)
-
-            logger.info("-------------------------------------\n")
-            if new_videos_count > 0:
-                logger.info(f"检查完成，共发现 {new_videos_count} 个新视频。")
-                logger.info(f"新视频列表已保存到 {output_filename}，每行一个视频。")
-                logger.info(f"所有视频历史记录已更新到 {DB_FILE}")
+    all_new_videos = []
+    conn = sqlite3.connect(DB_FILE)
+    try:
+        for group_name in target_group_names:
+            if group_name in groups:
+                tag_id = groups[group_name]
+                logger.info(f"\n--- 正在检查分组: '{group_name}' (tag_id: {tag_id}) ---")
+                
+                ups_in_group = get_followings_in_group(session, my_mid, tag_id)
+                
+                if ups_in_group:
+                    total_ups = len(ups_in_group)
+                    logger.info(f"分组 '{group_name}' 中共有 {total_ups} 位UP主，开始检查...")
+                    for i, up in enumerate(ups_in_group, 1):
+                        logger.info(f"  - [{i}/{total_ups}] 正在检查UP主: {up['uname']:<20} MID: {up['mid']}")
+                        mid = str(up['mid'])
+                        
+                        videos = get_up_videos(mid, session)
+                        if videos:
+                            logger.info(f"    获取到 {len(videos)} 个最新视频，正在比对数据库...")
+                            for video in videos:
+                                video_info = {
+                                    "up_name": up['uname'],
+                                    "up_mid": up['mid'],
+                                    "bvid": video['bvid'],
+                                    "title": video['title'],
+                                    "link": video['link']
+                                }
+                                if save_video_if_not_exists(conn, video_info):
+                                    logger.info(f"      [新视频] {video['title']}")
+                                    logger.info(f"        链接: {video['link']}")
+                                    all_new_videos.append(video_info)
+                        else:
+                            logger.info("    未能获取到视频列表。")
+                        logger.info("")  # 空行分隔不同的UP主
+                        time.sleep(config.get("retry_interval", 5)) # 每次检查UP后稍作停顿，避免过于频繁
+                else:
+                    logger.info(f"分组 '{group_name}' 下没有关注的UP主或获取失败。")
             else:
-                logger.info("检查完成，没有发现新视频。")
-                logger.info(f"已生成空的 {output_filename} 文件。")
-        else:
-            logger.info("'投资' 分组下没有关注的UP主或获取失败。\n")
+                logger.warning(f"在您的B站关注中未找到名为 '{group_name}' 的分组，已跳过。")
+    finally:
+        conn.close()
+
+    # 汇总并写入文件
+    logger.info("-------------------------------------\n")
+    if all_new_videos:
+        # 按UP主名称排序，方便查看
+        all_new_videos.sort(key=lambda v: v['up_name'])
+        
+        new_videos_count = len(all_new_videos)
+        current_time = time.strftime("%Y%m%d-%H%M%S")
+        output_filename = DATA_DIR / "list" / f"new_videos_{current_time}.txt"
+        output_filename.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_filename, 'w', encoding='utf-8') as f:
+            for video in all_new_videos:
+                line = f"- {video['title']} | 作者: {video['up_name']} | 链接: {video['link']}\n"
+                f.write(line)
+        
+        logger.info(f"检查完成，共发现 {new_videos_count} 个新视频。")
+        logger.info(f"新视频列表已保存到 {output_filename}")
+        logger.info(f"所有视频历史记录已更新到 {DB_FILE}")
     else:
-        logger.info("未找到名为 '投资' 的关注分组。\n")
+        logger.info("所有指定分组检查完成，没有发现新视频。")
 
         
