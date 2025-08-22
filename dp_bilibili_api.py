@@ -10,17 +10,26 @@ from functools import reduce
 import urllib.parse
 import hashlib
 from pathlib import Path
-from pprint import pprint
 
 class dp_bilibili:
     def __init__(self, ua="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3", cookies=None, logger=None, retry_max=10, retry_interval=5):
+        """
+        初始化 dp_bilibili API 客户端。
+
+        Args:
+            ua (str, optional): User-Agent. 默认为一个Chrome User-Agent.
+            cookies (dict, optional): 用于会话的 cookies. 默认为 None.
+            logger (logging.Logger, optional): 日志记录器实例. 如果为 None, 将创建一个默认的. 默认为 None.
+            retry_max (int, optional): API 请求失败时的最大重试次数. 默认为 10.
+            retry_interval (int, optional): 每次重试之间的间隔时间（秒）. 默认为 5.
+        """
         self.ua = ua
         self.session = requests.Session()
         self.session.headers.update({'User-Agent': self.ua})
         if cookies:
             self.session.cookies.update(cookies)
         if logger:
-            self.logger = self.logger
+            self.logger = logger
         else:
             self.logger = logging.getLogger(__name__)
             self.logger.setLevel(logging.INFO)
@@ -39,7 +48,15 @@ class dp_bilibili:
 
 
     def login_by_qrcode(self) -> bool:
-        """通过二维码扫描进行登录并返回一个包含cookies的session对象"""
+        """
+        通过二维码扫描进行登录。
+
+        该方法会获取登录二维码，在终端显示，并轮询等待用户扫描确认。
+        成功登录后，session 中会包含有效的 cookies。
+
+        Returns:
+            bool: 如果登录成功返回 True, 否则返回 False.
+        """
         # 1. 获取二维码URL和key
         login_url_api = "https://passport.bilibili.com/x/passport-login/web/qrcode/generate"
 
@@ -83,8 +100,16 @@ class dp_bilibili:
         except Exception as e:
             self.logger.info(f"轮询登录状态时发生错误: {e}")
             return False
-        
+
     def login(self) -> bool:
+        """
+        确保用户已登录。
+
+        首先测试当前 session 是否有效。如果无效，则调用二维码登录流程。
+
+        Returns:
+            bool: 如果最终登录状态为成功，则返回 True, 否则返回 False.
+        """
         if not self.test_login():
             self.logger.info("请重新扫码登录")
             self.login_by_qrcode()
@@ -99,6 +124,14 @@ class dp_bilibili:
             return True
 
     def test_login(self):
+        """
+        测试当前 session 中的 cookies 是否有效。
+
+        通过访问导航 API 来验证登录状态。如果成功，会更新 self.mid 和 self.name。
+
+        Returns:
+            bool: 如果已登录则返回 True, 否则返回 False.
+        """
         nav_api = "https://api.bilibili.com/x/web-interface/nav"
         try:
             response = self.session.get(nav_api)
@@ -117,13 +150,22 @@ class dp_bilibili:
             return False
         
     def get_following_groups(self):
+        """
+        获取当前用户的关注分组列表。
+
+        结果会存储在 self.groups 中。
+
+        Returns:
+            dict: 关注分组的字典，格式为 {tag_id: {'name': group_name, 'count': member_count}}。
+                  失败时返回空字典。
+        """
         url = "https://api.bilibili.com/x/relation/tags"
         try:
             response = self.session.get(url)
             response.raise_for_status()
             data = response.json()
             if data['code'] == 0:
-                # 包含默认的“全部关注”和“悄悄关注”等
+                # 包含默认的“全部关注”和“悄悄关注”等，使用字典推导式
                 self.groups = {group['tagid']: {'name':group['name'], 'count':group['count']} for group in data['data']}
             else:
                 self.logger.info(f"获取关注分组失败: {data['message']}")
@@ -135,7 +177,15 @@ class dp_bilibili:
         return self.groups
 
     def get_wbi_keys(self):
-        """获取WBI签名所需的img_key和sub_key，失败时会自动重试。"""
+        """
+        获取WBI签名所需的img_key和sub_key。
+
+        该方法会访问导航 API 以获取最新的 WBI 密钥，并存储在 self.img_key 和 self.sub_key 中。
+        失败时会自动重试。
+
+        Returns:
+            tuple[str, str] | tuple[None, None]: 成功时返回 (img_key, sub_key)，失败时返回 (None, None)。
+        """
         url = "https://api.bilibili.com/x/web-interface/nav"
 
         for attempt in range(self.retry_max):
@@ -158,7 +208,15 @@ class dp_bilibili:
         return None, None
 
     def get_mixin_key(self, orig: str):
-        """根据B站的规则对imgKey和subKey进行打乱，生成mixinKey"""
+        """
+        根据B站的规则对imgKey和subKey进行打乱，生成mixinKey。
+
+        Args:
+            orig (str): 拼接后的 img_key 和 sub_key。
+
+        Returns:
+            str: 计算得到的 mixinKey。
+        """
         MIXIN_KEY_ENC_TAB = [
             46, 47, 18, 2, 53, 8, 23, 32, 15, 50, 10, 31, 58, 3, 45, 35, 27, 43, 5, 49,
             33, 9, 42, 19, 29, 28, 14, 39, 12, 38, 41, 13, 37, 48, 7, 16, 24, 55, 40,
@@ -168,10 +226,18 @@ class dp_bilibili:
         return reduce(lambda s, i: s + orig[i], MIXIN_KEY_ENC_TAB, '')[:32]
 
     def sign_params(self, params: dict):
+        """
+        为请求参数进行WBI签名。
+
+        Args:
+            params (dict): 需要签名的原始参数字典。
+
+        Returns:
+            dict: 包含了 w_rid 和 wts 签名的新参数字典。如果缺少 WBI 密钥则返回空字典。
+        """
         if not self.img_key or not self.sub_key:
             return {}
         
-        """为请求参数进行WBI签名"""
         mixin_key = self.get_mixin_key(self.img_key + self.sub_key)
         curr_time = int(time.time())
         params['wts'] = curr_time
@@ -192,9 +258,17 @@ class dp_bilibili:
         return params
 
     def get_up_videos(self, mid, ps=30, pn=1):
-        """获取UP主第一页视频信息"""
+        """
+        获取指定UP主的视频列表。
 
-        
+        Args:
+            mid (int or str): UP主的UID。
+            ps (int, optional): 每页视频数量. 默认为 30.
+            pn (int, optional): 页码. 默认为 1.
+
+        Returns:
+            dict: 视频列表字典，格式为 {bvid: {'title': video_title}}。失败时返回空字典。
+        """
         # 构造基本参数
         params = {
             "mid": mid,
@@ -228,10 +302,10 @@ class dp_bilibili:
             if data["code"] != 0:
                 self.logger.info(f"API请求失败: {data['message']}")
                 return []
-            
+
             # 提取视频数据
             videos = {}
-            for video in data["data"]["list"]["vlist"]:
+            for video in data["data"]["list"]["vlist"]:# 提取视频数据
                 title = video["title"]
                 bvid = video["bvid"]
                 videos[bvid] = {'title':title}
@@ -243,7 +317,17 @@ class dp_bilibili:
             return {}
 
     def get_ups_in_group(self, tag_id: int, pn: int = 1, ps: int = 300):
-        """根据分组ID获取关注的UP主列表，失败时会自动重试。"""
+        """
+        根据分组ID获取关注的UP主列表。
+
+        Args:
+            tag_id (int): 关注分组的 ID。
+            pn (int, optional): 页码. 默认为 1.
+            ps (int, optional): 每页数量. 默认为 300.
+
+        Returns:
+            dict: UP主列表字典，格式为 {mid: {'name': up_name}}。失败时返回空字典。
+        """
         api_url = "https://api.bilibili.com/x/relation/tag"
         params = {
             "mid": self.mid,
@@ -254,12 +338,11 @@ class dp_bilibili:
         headers = {
             "Referer": f"https://space.bilibili.com/{self.mid}/fans/follow",
         }
-        self.session.headers.update(headers)
 
         for attempt in range(self.retry_max):
             try:
                 # session中已包含User-Agent
-                response = self.session.get(api_url, params=params, timeout=10)
+                response = self.session.get(api_url, headers=headers, params=params, timeout=10)
                 response.raise_for_status()
                 data = response.json()
                 if data.get('code') == 0:
@@ -282,8 +365,15 @@ class dp_bilibili:
         return {} # 所有重试都失败后
     
     def get_video_info(self, bvid):
-        """获取视频信息"""
+        """
+        获取指定BVID视频的详细信息。
 
+        Args:
+            bvid (str): 视频的BVID。
+
+        Returns:
+            dict: 视频信息字典，包含 pubdate, title, duration, cid 等。失败时返回空字典。
+        """
         api_url = "https://api.bilibili.com/x/web-interface/view"
         params = {
             "bvid": bvid
@@ -320,8 +410,18 @@ class dp_bilibili:
         return {} # 所有重试都失败后
     
     def get_audio_download_url(self, bvid, cid):
-        """获取视频下载链接"""
+        """
+        获取视频的音频下载链接。
 
+        会优先选择码率为 132kbps (ID 30280), 192kbps (ID 30232), 64kbps (ID 30216) 的音轨。
+
+        Args:
+            bvid (str): 视频的BVID。
+            cid (int): 视频的CID。
+
+        Returns:
+            str: 音频的下载 URL。失败时返回空字符串。
+        """
         api_url = "https://api.bilibili.com/x/player/wbi/playurl"
         params = {
             'fnval': 16,  # 16表示dash格式的视频
@@ -343,9 +443,9 @@ class dp_bilibili:
                     target_ids = [30280, 30232, 30216]
                     selected_audio = ""
                     for target_id in target_ids:
-                        for audio in audio_json_list:
+                        for audio in audio_json_list:# 优先选择id为30280, 30232, 30216的音频
                             if audio.get("id") == target_id:
-                                selected_audio = audio.get('baseUrl', "")
+                                selected_audio = audio.get('base_url', "")
                                 break
                     return selected_audio
                 else:
@@ -361,9 +461,20 @@ class dp_bilibili:
             else:
                 self.logger.info("已达到最大重试次数，获取视频下载链接失败。")
                 
-        return {} # 所有重试都失败后
+        return "" # 所有重试都失败后
 
 def download_file_with_resume(session, url, file_path:Path):
+    """
+    使用 requests.Session 下载文件，并支持断点续传。
+
+    Args:
+        session (requests.Session): 用于下载的会话对象。
+        url (str): 文件的下载 URL。
+        file_path (Path): 文件保存的本地路径。
+
+    Returns:
+        bool: 下载成功返回 True，否则返回 False。
+    """
     headers = {}
     # 检查是否已存在部分下载的文件
     if file_path.exists():
