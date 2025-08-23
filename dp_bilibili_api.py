@@ -46,7 +46,6 @@ class dp_bilibili:
         self.mid = 0
         self.name = ""
 
-
     def login_by_qrcode(self) -> bool:
         """
         通过二维码扫描进行登录。
@@ -123,7 +122,7 @@ class dp_bilibili:
             self.logger.info("已经登录，无需扫码登录")
             return True
 
-    def test_login(self):
+    def test_login(self) -> bool:
         """
         测试当前 session 中的 cookies 是否有效。
 
@@ -160,20 +159,27 @@ class dp_bilibili:
                   失败时返回空字典。
         """
         url = "https://api.bilibili.com/x/relation/tags"
-        try:
-            response = self.session.get(url)
-            response.raise_for_status()
-            data = response.json()
-            if data['code'] == 0:
-                # 包含默认的“全部关注”和“悄悄关注”等，使用字典推导式
-                self.groups = {group['tagid']: {'name':group['name'], 'count':group['count']} for group in data['data']}
-            else:
-                self.logger.info(f"获取关注分组失败: {data['message']}")
+        
+        for attempt in range(self.retry_max):
+            try:
+                response = self.session.get(url)
+                response.raise_for_status()
+                data = response.json()
+                if data['code'] == 0:
+                    # 包含默认的“全部关注”和“悄悄关注”等，使用字典推导式
+                    self.groups = {group['tagid']: {'name':group['name'], 'count':group['count']} for group in data['data']}
+                else:
+                    self.logger.info(f"获取关注分组失败: {data['message']}")
+                    self.groups = {}
+            except Exception as e:
+                self.logger.info(f"获取关注分组时发生错误: {e}")
                 self.groups = {}
-        except Exception as e:
-            self.logger.info(f"获取关注分组时发生错误: {e}")
-            self.groups = {}
-            
+                if attempt < self.retry_max - 1:
+                    self.logger.info(f"将在 {self.retry_interval} 秒后重试...")
+                    time.sleep(self.retry_interval)
+                else:
+                    self.logger.info("已达到最大重试次数，获取关注分组失败。")
+
         return self.groups
 
     def get_wbi_keys(self):
@@ -197,6 +203,7 @@ class dp_bilibili:
                 sub_url = data["data"]["wbi_img"]["sub_url"]
                 self.img_key = img_url.split("/")[-1].split(".")[0]
                 self.sub_key = sub_url.split("/")[-1].split(".")[0]
+                self.logger.info(f"获取WBI密钥成功: img_key={self.img_key}, sub_key={self.sub_key}")
                 return self.img_key, self.sub_key
             except Exception as e:
                 self.logger.info(f"获取WBI密钥失败 (尝试 {attempt + 1}/{self.retry_max}): {e}")
@@ -225,7 +232,7 @@ class dp_bilibili:
         ]
         return reduce(lambda s, i: s + orig[i], MIXIN_KEY_ENC_TAB, '')[:32]
 
-    def sign_params(self, params: dict):
+    def sign_params(self, params: dict) -> dict:
         """
         为请求参数进行WBI签名。
 
@@ -236,6 +243,7 @@ class dp_bilibili:
             dict: 包含了 w_rid 和 wts 签名的新参数字典。如果缺少 WBI 密钥则返回空字典。
         """
         if not self.img_key or not self.sub_key:
+            self.logger.error("缺少WBI密钥，无法进行参数签名")
             return {}
         
         mixin_key = self.get_mixin_key(self.img_key + self.sub_key)
@@ -257,7 +265,7 @@ class dp_bilibili:
         params['w_rid'] = w_rid
         return params
 
-    def get_up_videos(self, mid, ps=30, pn=1):
+    def get_videos_in_up(self, mid, ps=30, pn=1):
         """
         获取指定UP主的视频列表。
 
@@ -287,34 +295,41 @@ class dp_bilibili:
             "Referer": f"https://space.bilibili.com/{mid}/"
         }
         self.session.headers.update(headers)
-        
-        try:
-            # 发送API请求
-            response = self.session.get(
-                "https://api.bilibili.com/x/space/wbi/arc/search",
-                params=signed_params,
-                headers=headers,
-                timeout=10
-            )
-            data = response.json()
-            
-            # 检查响应状态
-            if data["code"] != 0:
-                self.logger.info(f"API请求失败: {data['message']}")
-                return []
+        for attempt in range(self.retry_max):
+            try:
+                # 发送API请求
+                response = self.session.get(
+                    "https://api.bilibili.com/x/space/wbi/arc/search",
+                    params=signed_params,
+                    headers=headers,
+                    timeout=10
+                )
+                response.raise_for_status()
+                data = response.json()
+                
+                # 检查响应状态
+                if data["code"] != 0:
+                    self.logger.error(data)
+                    self.logger.error(f"API请求失败: code: {data['code']}, msg: {data['message']}")
+                    return []
 
-            # 提取视频数据
-            videos = {}
-            for video in data["data"]["list"]["vlist"]:# 提取视频数据
-                title = video["title"]
-                bvid = video["bvid"]
-                videos[bvid] = {'title':title}
+                # 提取视频数据
+                videos = {}
+                for video in data["data"]["list"]["vlist"]:# 提取视频数据
+                    title = video["title"]
+                    bvid = video["bvid"]
+                    videos[bvid] = {'title':title}
+                
+                return videos
             
-            return videos
-        
-        except Exception as e:
-            self.logger.info(f"请求发生错误: {e}")
-            return {}
+            except Exception as e:
+                self.logger.error(f"请求发生错误: {e}")
+                if attempt < self.retry_max - 1:
+                    self.logger.info(f"将在 {self.retry_interval} 秒后重试...")
+                    time.sleep(self.retry_interval)
+                else:
+                    self.logger.info("已达到最大重试次数，获取关注分组失败。")
+        return {} # 所有重试都失败后
 
     def get_ups_in_group(self, tag_id: int, pn: int = 1, ps: int = 300):
         """
@@ -392,7 +407,7 @@ class dp_bilibili:
                 if data.get('code') == 0:
                     # 成功获取，返回数据
                     data_json = data.get("data", {})
-                    video_info = {data_json["bvid"]:{'pubdate':data_json["pubdate"],'title':data_json['title'],'duration':data_json['duration'], 'cid':data_json['cid']}}
+                    video_info = {'pubdate':data_json["pubdate"],'duration':data_json['duration'], 'cid':data_json['cid']}
                     return video_info
                 else:
                     # API返回错误码，打印信息并重试
@@ -523,7 +538,7 @@ if __name__ == "__main__":
     dp_blbl.logger.info(f"分组 {group_name} 中的UP主: {ups}")
     up_id, up_name = next(iter(ups.items()))  # 获取第一个UP主
     dp_blbl.logger.info(f"第一个UP主: {up_name}, ID: {up_id}")
-    videos = dp_blbl.get_up_videos(up_id)
+    videos = dp_blbl.get_videos_in_up(up_id)
     dp_blbl.logger.info(f"UP主 {up_name} 的视频列表: {videos}")
     bvid, title = next(iter(videos.items()))  # 获取第一个视频
     dp_blbl.logger.info(f"第一个视频: {title}, BV号: {bvid}")

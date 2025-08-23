@@ -22,7 +22,7 @@ def setup_logger(name: str = 'my_app', file_level: int = logging.DEBUG, console_
 
     # 创建一个 logger
     logger = logging.getLogger(name)
-    logger.setLevel(logging.INFO)
+    logger.setLevel(logging.DEBUG)
 
     # 如果 logger 已有 handlers，先清除，防止重复输出
     if logger.hasHandlers():
@@ -30,7 +30,7 @@ def setup_logger(name: str = 'my_app', file_level: int = logging.DEBUG, console_
 
     # 创建一个 formatter，定义日志的格式
     formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        '%(asctime)s - %(name)s - %(levelname)s - [%(filename)s:%(lineno)d] - %(message)s',
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
@@ -52,14 +52,9 @@ def setup_logger(name: str = 'my_app', file_level: int = logging.DEBUG, console_
 
 # 示例用法
 if __name__ == '__main__':
-    # 创建一个名为 'logs' 的子目录来存放日志文件
-    log_directory = Path(__file__).parent / "logs"
-
-    # 获取 logger
-    # 您可以为不同的模块设置不同的 logger
     main_logger = setup_logger('main_module', file_level=logging.DEBUG, console_level=logging.INFO)
 
-    main_logger.debug("这是一条 debug 消息。它会出现在文件和控制台。")
+    main_logger.debug("这是一条 debug 消息。")
     main_logger.info("这是一条 info 消息。")
     main_logger.warning("这是一条 warning 消息。")
     main_logger.error("发生了一个错误。")

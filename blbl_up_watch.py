@@ -265,7 +265,7 @@ def get_followings_in_group(session: requests.Session, mid: int, tag_id: int):
             
     return [] # 所有重试都失败后，返回空列表
 
-def get_up_videos(mid, session: requests.Session):
+def get_videos_in_up(mid, session: requests.Session):
     """获取UP主第一页视频信息"""
     # 获取签名密钥
     img_key, sub_key = get_wbi_keys(session)
@@ -421,7 +421,7 @@ if __name__ == "__main__":
                         logger.info(f"  - [{i}/{total_ups}] 正在检查UP主: {up['uname']:<20} MID: {up['mid']}")
                         mid = str(up['mid'])
                         
-                        videos = get_up_videos(mid, session)
+                        videos = get_videos_in_up(mid, session)
                         if videos:
                             logger.info(f"    获取到 {len(videos)} 个最新视频，正在比对数据库...")
                             for video in videos:
