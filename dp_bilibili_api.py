@@ -407,13 +407,30 @@ class dp_bilibili:
                 if data.get('code') == 0:
                     # 成功获取，返回数据
                     data_json = data.get("data", {})
-                    video_info = {'pubdate':data_json["pubdate"],'duration':data_json['duration'], 'cid':data_json['cid']}
+                    status = 'normal'
+                    if data_json.get('is_upower_exclusive') == False:
+                        status = 'upower'
+                    video_info = {'pubdate':data_json["pubdate"],'duration':data_json['duration'], 'cid':data_json['cid'], "status":status}
                     return video_info
                 else:
                     # API返回错误码，打印信息并重试
-                    self.logger.info(f"获取视频信息失败 (尝试 {attempt + 1}/{self.retry_max}): {data.get('message')}")
+                    if data.get('message') == "-400":
+                        msg = '请求错误'
+                    elif data.get('message') == "-403":
+                        msg = '请求错误'
+                    elif data.get('message') == "-404":
+                        msg = '无视频'
+                    elif data.get('message') == "62002":
+                        msg = '稿件不可见'
+                    elif data.get('message') == "62004":
+                        msg = '稿件审核中'
+                    elif data.get('message') == "62012":
+                        msg = '仅UP主自己可见'
+                    self.logger.warning(f"获取视频信息失败 {data.get('message')}:{msg}")
+                    return {'pubdate':0,'duration':0, 'cid':0, "status":msg}
+
             except Exception as e:
-                # 请求或解析过程发生异常，打印信息并重试
+                # 请求或解析过程发生异常，打印信息并重试msg
                 self.logger.info(f"请求视频信息时发生错误 (尝试 {attempt + 1}/{self.retry_max}): {e}")
                 
             if attempt < self.retry_max - 1:

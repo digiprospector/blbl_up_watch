@@ -7,7 +7,6 @@ import logging
 from dp_bilibili_api import dp_bilibili
 from dp_logging import setup_logger
 import shutil
-from worker_thread import WorkerThread
 import time
 import sqlite3
 
